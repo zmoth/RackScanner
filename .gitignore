@@ -11,3 +11,5 @@ local
 settings.py
 RackScanner-debug.ipynb
 *.egg-info
+
+.venv

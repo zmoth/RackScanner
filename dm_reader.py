@@ -604,17 +604,14 @@ def decode_raw(well, debug=False):
     cntr = find_contour(threshold(well))
 
     # 计算并拟合一个最小外接矩形框
-    box, u, v, a, b = fit_box(cntr)
-    center_b = box[0] + (box[2] - box[0]) / 2
-    # rect = cv2.minAreaRect(cntr)
-    # box = cv2.boxPoints(rect)
-    # center_b, size, _ = rect
-    # a, b = size
+    rect = cv2.minAreaRect(cntr)
+    box = cv2.boxPoints(rect)
+    center_b, rect_size, _ = rect
+    a, b = rect_size
 
     # 排序矩形框的长宽
-    a, b = sorted([a, b])
-    # if a > b:
-    #     a, b = b, a
+    if a > b:
+        a, b = b, a
 
     # 判断矩形框尺寸是否满足特定范围（65至80像素）
     if a > 65 and a < 80 and b > 65 and b < 80:
@@ -632,9 +629,8 @@ def decode_raw(well, debug=False):
         cntr = np.append(cntr, extra_point, axis=0)
 
         # 重新拟合矩形框并进行解码
-        # rect = cv2.minAreaRect(cntr)
-        # box = cv2.boxPoints(rect)
-        box, u, v, a, b = fit_box(cntr)
+        rect = cv2.minAreaRect(cntr)
+        box = cv2.boxPoints(rect)
         code, binarized = warp(well, box, debug=True)
     # 其他情况，返回None作为解码结果
     # elif a > 80 or b > 80:
@@ -707,11 +703,10 @@ def decode_harris(well, debug=False, harris=None):
     cntr = find_contour(thr)
 
     # 计算并拟合一个最小外接矩形框
-    # rect = cv2.minAreaRect(cntr)
-    # box = cv2.boxPoints(rect)
-    # _, size, _ = rect
-    # a, b = size
-    box, u, v, a, b = fit_box(cntr)
+    rect = cv2.minAreaRect(cntr)
+    box = cv2.boxPoints(rect)
+    _, size, _ = rect
+    a, b = size
 
     # 判断矩形框尺寸是否满足最小要求
     if a > min_size and b > min_size:
@@ -1088,11 +1083,6 @@ def decode(img):
     4. 验证解码得到的字符串是否符合特定格式：可选两个字母开头（`\w\w`），后面跟随10个数字（`\d{10}`）。
     5. 如果解码结果满足预设格式要求，则返回该字符串；否则返回 None。
     """
-
-    # # 获取图像的高和宽
-    # height = img.shape[0]
-    # width = img.shape[1]
-
     # 使用pylibdmtx库解码图像中的Data Matrix条形码
     code = pylibdmtx.decode(img, **libdmtx_params)
 
@@ -1118,7 +1108,7 @@ def trim_contour(cntr, size=70):
         _type_: 返回经过调整后的最小面积包围矩形 (Minimum Area Bounding Rectangle) 的四个顶点坐标组成的数组。
 
     函数实现：
-    1. 使用 fit_box 函数获取轮廓的最小面积包围矩形及其矩形边长度和方向向量。
+    1. 使用 minAreaRect 函数获取轮廓的最小面积包围矩形及其矩形边长度和方向向量。
     2. 当任一矩形边长度大于设定的 `size` 时，计算对应的缩放矩阵 Mb。
     3. 对轮廓点进行变换，使得过长的矩形边一侧行坐标（根据 dim 确定）被拉伸或压缩至接近目标边长。
     4. 调整轮廓中最大和最小行坐标的点到包围矩形中心，以此来裁剪超出范围的部分。
@@ -1128,15 +1118,14 @@ def trim_contour(cntr, size=70):
     # 循环处理直到轮廓的最小面积包围矩形的两边都不超过给定尺寸
     while True:
         # 计算并获取轮廓的最小面积包围矩形以及相关参数
-        # rect = cv2.minAreaRect(cntr)
-        # box = cv2.boxPoints(rect)
-        # center, rect_size, _ = rect
-        # a, b = rect_size
-        # u = box[0] - box[1]
-        # v = box[2] - box[1]
-        box, u, v, a, b = fit_box(cntr)
-
-        center = box[0] + (box[2] - box[0]) / 2
+        rect = cv2.minAreaRect(cntr)
+        box = cv2.boxPoints(rect)
+        center, rect_size, _ = rect
+        u = box[0] - box[1]
+        v = box[2] - box[1]
+        a = cv2.norm(u)
+        b = cv2.norm(v)
+        # b, a = rect_size
 
         # break
 
@@ -1221,45 +1210,6 @@ def threshold(img, level=0):
 
     # 返回二值化后的图像
     return thr
-
-
-def fit_box(cntr):
-    """
-    fit_box 函数用于找到一个最小面积包围矩形 (Minimum Area Bounding Rectangle, MABR) 并计算相关参数。
-
-    Args:
-        cntr (_type_): 通常为一个 numpy 数组，表示一组二维点（可能是轮廓点或其他形状的顶点），格式为 (N, 2)，其中 N 是点的数量，每一行代表一个点的 (x, y) 坐标。
-
-    Returns:
-        _type_: 返回以下多个对象：
-            - box: 一个包含矩形四个顶点坐标的数组，每个顶点是一个二元组 `(x, y)`，顺序是逆时针方向从左上角开始。
-            - u: 矩形对角线之一的向量，计算方法是从矩形的一个顶点减去另一个顶点。
-            - v: 矩形另一条对角线的向量，同样通过两个顶点相减得到。
-            - norm_u: 向量 `u` 的范数（长度）。
-            - norm_v: 向量 `v` 的范数（长度）。
-
-    函数实现：
-    1. 使用 OpenCV 的 cv2.minAreaRect 函数找到输入点集 `cntr` 的最小面积外接矩形，并返回其旋转框（Rotated Rectangle）表示。
-    2. 调用 cv2.boxPoints 函数将旋转框转换为边界框的四个角点坐标。
-    3. 计算矩形两条对角线的向量 `u` 和 `v`，这里取的是相对顶点进行计算。
-    4. 使用 OpenCV 的 cv2.norm 函数分别计算这两条对角线的长度（范数）并返回。
-    """
-
-    # 寻找给定点集 cntr 的最小面积外接矩形，并获取其四个顶点坐标
-    box = cv2.boxPoints(cv2.minAreaRect(cntr))
-
-    # 计算矩形第一条对角线的向量
-    u = box[0] - box[1]
-
-    # 计算矩形第二条对角线的向量
-    v = box[2] - box[1]
-
-    # 计算两对角线的长度（范数）
-    norm_u = cv2.norm(u)
-    norm_v = cv2.norm(v)
-
-    # 返回矩形的四个顶点、两条对角线向量及其长度
-    return box, u, v, norm_u, norm_v
 
 
 def make_round_kernel(size):

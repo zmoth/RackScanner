@@ -212,7 +212,7 @@ def locate_wells(img, vial=False, debug=False):
 
     else:
         # 整块板子识别
-        labeled, n_wells, crop = matchTemplate(
+        labeled, n_wells, crop = match_template(
             img, "resources/template_96.png", debug=debug
         )
         b = 100
@@ -228,7 +228,7 @@ def locate_wells(img, vial=False, debug=False):
             )
         else:
             # 若未匹配到96孔板，则尝试匹配24孔板
-            labeled, m, crop = matchTemplate(
+            labeled, m, crop = match_template(
                 img, "resources/template_24.png", debug=debug
             )
 
@@ -272,9 +272,9 @@ def locate_wells(img, vial=False, debug=False):
     return df
 
 
-def matchTemplate(img, templ_file, debug=False):
+def match_template(img, templ_file, debug=False):
     """
-    matchTemplate 函数实现模板匹配算法，将指定的模板图片与原始图像进行匹配，并在原图中找到相似度最高的区域。
+    match_template 函数实现模板匹配算法，将指定的模板图片与原始图像进行匹配，并在原图中找到相似度最高的区域。
 
     Args:
         img (_type_): 原始图像数据，通常为灰度图像或单通道彩色图像的 numpy 数组。
@@ -437,55 +437,34 @@ def read_barcode(well):
     thr = thr * peephole
     # 判断二值化图像是否有足够的有效像素（面积较小可能是无条形码）
     if thr.sum() < 200:
-        # print("EMPTY")
         return ("empty", "empty")
 
-    # # 开始计时
-    # start = time.time()
     # 尝试直接解码原始图像
     code = decode_raw(well)
-    # # 计算识别耗时
-    # duration = time.time() - start
-    # print(f"Elapsed time decode_raw: {duration*1000} ms")
     if code:
-        # print(f"decode_raw: {code}")
         return (code, "raw")
 
-    # （已注释掉的LSD解码尝试）
+    # 使用Harris角点检测增强后解码
+    code = decode_harris(well)
+    if code:
+        return (code, "harris")
+
+    # # LSD解码尝试
     # code = decode_lsd(well)
     # if code:
     #     return (code, 'lsd')
 
-    # # 开始计时
-    # start = time.time()
-    # 使用Harris角点检测增强后解码
-    code = decode_harris(well)
-    # # 计算识别耗时
-    # duration = time.time() - start
-    # print(f"Elapsed time decode_harris: {duration*1000} ms")
-    if code:
-        # print(f"decode_harris: {code}")
-        return (code, "harris")
-
-    # # 开始计时
-    # start = time.time()
     # 在未经改进的原始图像上尝试解码
     code = decode(well)
-    # # 计算识别耗时
-    # duration = time.time() - start
-    # print(f"Elapsed time decode_harris: {duration*1000} ms")
     if code:
-        # print(f"decode_unchanged: {code}")
         return (code, "unchanged")
 
     # 通过傅里叶变换进行图像旋转校正后尝试解码
-    rotated = improve_fft(well)
-    code = decode(rotated)
+    code = decode_rotated(well)
     if code:
         return (code, "rotated")
 
     # 所有尝试解码均失败，返回失败标记
-    # print("FAILED")
     return ("failed", "failed")
 
 
@@ -548,7 +527,7 @@ def decode_lsd(well, debug=False):
     box = box[[box.argmax(0)[1], box.argmin(0)[0], box.argmin(0)[1], box.argmax(0)[0]]]
 
     # 对图像进行仿射变换和解码
-    code, binarized = warp(well, box, True)
+    code, binarized = warp_decode(well, box, True)
 
     # 调试模式下可视化处理结果
     if debug:
@@ -581,7 +560,7 @@ def decode_lsd(well, debug=False):
 
 def decode_raw(well, debug=False):
     """
-    decode_raw 函数对输入的孔位图像（well）进行预处理，识别条形码区域，并根据不同的条件调用 warp 函数进行解码。
+    decode_raw 函数对输入的孔位图像（well）进行预处理，识别条形码区域，并根据不同的条件调用 warp_decode 函数进行解码。
 
     Args:
         well (_type_): 输入的二维数组或灰度图像数据。
@@ -616,8 +595,8 @@ def decode_raw(well, debug=False):
     # 判断矩形框尺寸是否满足特定范围（65至80像素）
     if a > 65 and a < 80 and b > 65 and b < 80:
         # 裁剪轮廓并使用warped函数进行解码
-        trimmed_cntr = trim_contour(cntr)
-        code, binarized = warp(well, trimmed_cntr, debug=True)
+        box = trim_contour(cntr)
+        code, binarized = warp_decode(well, box, debug=True)
     # 判断矩形框尺寸是否接近特定条件（宽度接近50像素且高度接近94像素）
     elif abs(a - 50) < 5 and abs(b - 94) < 5:
         # 计算矩形框中心点并找到最小包围圆心
@@ -631,7 +610,7 @@ def decode_raw(well, debug=False):
         # 重新拟合矩形框并进行解码
         rect = cv2.minAreaRect(cntr)
         box = cv2.boxPoints(rect)
-        code, binarized = warp(well, box, debug=True)
+        code, binarized = warp_decode(well, box, debug=True)
     # 其他情况，返回None作为解码结果
     # elif a > 80 or b > 80:
     else:
@@ -667,7 +646,7 @@ def decode_raw(well, debug=False):
 
 def decode_harris(well, debug=False, harris=None):
     """
-    decode_harris 函数通过使用 Harris 角点检测算法对输入的井图像（well）进行处理，识别可能包含条形码区域的矩形框，并调用 warp 函数进行进一步解码。
+    decode_harris 函数通过使用 Harris 角点检测算法对输入的井图像（well）进行处理，识别可能包含条形码区域的矩形框，并调用 warp_decode 函数进行进一步解码。
 
     Args:
         well (_type_): 输入的二维数组或灰度图像数据。
@@ -691,7 +670,7 @@ def decode_harris(well, debug=False, harris=None):
     # 计算Harris角点响应图，如果参数harris没有提供
     harris = cv2.cornerHarris(well, 4, 1, 0.0)
 
-    # 计算响应图的偏斜度，根据偏斜度调整形状
+    # 计算响应图的偏度，根据偏度调整形状
     skew = scipy.stats.skew(harris, axis=None)
     if skew > 3.49:  # 检查是否近似正方形
         harris = cv2.morphologyEx(harris, cv2.MORPH_CLOSE, make_round_kernel(9))
@@ -712,7 +691,7 @@ def decode_harris(well, debug=False, harris=None):
     if a > min_size and b > min_size:
         # 对矩形框进行修剪并执行仿射变换等操作
         box = trim_contour(cntr)
-        code, binarized = warp(well, box, debug=True, thr_level=80)
+        code, binarized = warp_decode(well, box, debug=True, thr_level=80)
     else:
         # 不满足条件时，返回空结果
         code, binarized = None, well
@@ -749,9 +728,110 @@ def decode_harris(well, debug=False, harris=None):
     return code
 
 
-def warp(well, box, debug=False, thr_level=80):
+def decode_rotated(well, debug=False):
     """
-    warp 函数对输入的井图像（well）进行一系列图像处理操作，包括仿射变换、裁剪、调整大小、阈值处理、边界检查和修复，并尝试解码得到条形码信息。
+    该函数用于改进二维傅里叶变换（FFT），通过应用一系列图像处理技术，如频率域滤波、高斯模糊、旋转校正等，以优化输入井的图像质量。
+
+    Args:
+        well (_type_): 输入变量well是一个二维数组（例如：numpy数组），代表原始井的图像数据。
+
+    Returns:
+        _type_: 返回一个经过处理后的二维数组，表示优化和旋转校正后的井图像。
+
+    实现步骤：
+    1. 使用numpy库计算well的二维傅里叶变换，并进行fftshift操作，使低频分量位于图像中心。
+    2. 创建一个与well相同大小的零掩模矩阵mask。
+    3. 计算图像的中心坐标。
+    4. 在掩模矩阵中绘制一个内外半径分别为60和50的圆环区域，内部圆以外的部分设为1，内部圆内设为0。这实现了对特定频率成分的筛选。
+    5. 将筛选后的掩模应用于傅里叶变换结果filtered。
+    6. 对筛选后的结果进行高斯模糊处理以降低高频噪声。
+    7. 找到高斯模糊后的图像中的最大值及其坐标。
+    8. 根据最大值坐标计算其与图像中心的连线角度theta，可能会遇到除以零的异常情况，此时将theta设为0。
+    9. 根据得到的角度theta以及图像中心点，利用cv2.getRotationMatrix2D创建一个旋转矩阵M。
+    10. 使用cv2.warpAffine对原始井图像well进行旋转校正，返回旋转后的新图像rotated。
+    """
+    center = tuple(x // 2 for x in well.shape)  # 计算图像中心坐标
+
+    dft = cv2.dft(np.float32(well), flags=cv2.DFT_COMPLEX_OUTPUT)  # 正变换
+    dft = np.fft.fftshift(dft)  # 频谱中心化
+
+    mag = cv2.magnitude(dft[:, :, 0], dft[:, :, 1])
+
+    # 绘制圆环区域作为频域滤波器
+    mask = np.zeros(well.shape)  # 创建掩模矩阵
+    cv2.circle(mask, center, 60, color=1, thickness=-1)
+    cv2.circle(mask, center, 50, color=0, thickness=-1)
+
+    # 应用掩模到傅里叶变换结果
+    filtered = np.copy(mag) * mask
+
+    # 高斯模糊处理
+    blur = cv2.GaussianBlur(np.abs(filtered), (5, 5), 0)
+
+    # 找到最大值的位置
+    maximum = cv2.minMaxLoc(blur)[3]
+
+    # 计算角度theta
+    try:
+        theta = math.atan(float(maximum[1] - center[1]) / float(maximum[0] - center[0]))
+    except ZeroDivisionError:
+        theta = 0
+
+    # 创建旋转矩阵
+    M = cv2.getRotationMatrix2D(center, np.rad2deg(theta), 1.0)
+
+    # 对原始井图像进行旋转校正
+    rotated = cv2.warpAffine(well, M, (well.shape[1], well.shape[0]))
+
+    if debug:
+        mag = 20 * np.log(mag)
+        plt.subplot(131)
+        plt.imshow(mag, cmap="gray")
+
+        plt.subplot(132)
+        plt.imshow(blur)
+
+        plt.subplot(133)
+        plt.imshow(rotated)
+
+        plt.show()
+
+    return decode(rotated)
+
+
+def decode(img):
+    """
+    decode 函数用于解码输入图像（img）中的二维条形码（Data Matrix）并验证其内容格式。
+
+    Args:
+        img (_type_): 一个二维数组，通常为灰度图像或单通道彩色图像，表示包含 Data Matrix 条形码的图像数据。
+
+    Returns:
+        _type_: 如果成功解码并验证了条形码内容，则返回解码后的字符串；否则返回 None。
+
+    函数实现：
+    1. 获取输入图像的高度（height）和宽度（width）。
+    2. 使用 pylibdmtx 库中的 decode 函数尝试从图像中解码 Data Matrix 条形码。`**libdmtx_params` 表示可能存在的额外参数（未在代码片段中显示）。
+    3. 若解码成功，取出第一个条形码数据，并将其转换为 UTF-8 编码的字符串。
+    4. 验证解码得到的字符串是否符合特定格式：可选两个字母开头（`\w\w`），后面跟随10个数字（`\d{10}`）。
+    5. 如果解码结果满足预设格式要求，则返回该字符串；否则返回 None。
+    """
+    # 使用pylibdmtx库解码图像中的Data Matrix条形码
+    code = pylibdmtx.decode(img, **libdmtx_params)
+
+    # 检查是否有解码结果，并将解码后的字节数据转为UTF-8编码的字符串
+    code = code[0].data.decode("utf-8") if code else False
+
+    # 验证解码得到的字符串格式是否符合预设规则
+    # if code and re.match("(\w\w)?\d{10}", code):
+    return code
+    # else:
+    #     return None
+
+
+def warp_decode(well, box, debug=False, thr_level=80):
+    """
+    warp_decode 函数对输入的井图像（well）进行一系列图像处理操作，包括仿射变换、裁剪、调整大小、阈值处理、边界检查和修复，并尝试解码得到条形码信息。
 
     Args:
         well (_type_): 输入的二维数组，代表原始井图像。
@@ -910,13 +990,15 @@ def border_check_fix(arr, size):
     9. 在所有操作完成后，返回 True，表示已成功修复边界使其符合模板要求。
     """
 
-    # return True
-
     # 提取二维数组的边界
     borders = np.array([arr[-1, :], arr[:, 0], arr[0, :], arr[:, -1]])
 
     # 缩小边界元素以便进行求和运算
     borders[borders > 0] = 1
+
+    # 检查边界元素总数是否与预期相符
+    if abs(borders.sum() - 3 * size) > 4:
+        return False
 
     # 根据 size 参数选择合适的模板
     if size == 12:
@@ -942,32 +1024,27 @@ def border_check_fix(arr, size):
     # 获取最小差异值之和
     wrong = diffs.min(0).sum()
 
-    # 检查边界元素总数是否与预期相符
-    if abs(borders.sum() - 3 * size) > 4:
-        return False
-
     # 检查与模板的差异是否可接受
-    elif wrong > 4:
+    if wrong > 4:
         return False
     elif wrong == 0:
         return True
 
     # 边界需要修复且可以修复的情况
-    else:
-        # 使用最匹配的模板替换原边界
-        borders = template[diffs.argmin(0)]
+    # 使用最匹配的模板替换原边界
+    borders = template[diffs.argmin(0)]
 
-        # 将替换后的边界元素恢复到原始的最大值
-        borders[borders > 0] = arr.max()
+    # 将替换后的边界元素恢复到原始的最大值
+    borders[borders > 0] = arr.max()
 
-        # 更新二维数组 arr 的边界元素
-        arr[-1, :] = borders[0]
-        arr[:, 0] = borders[1]
-        arr[0, :] = borders[2]
-        arr[:, -1] = borders[3]
+    # 更新二维数组 arr 的边界元素
+    arr[-1, :] = borders[0]
+    arr[:, 0] = borders[1]
+    arr[0, :] = borders[2]
+    arr[:, -1] = borders[3]
 
-        # 表示成功修复边界，返回 True
-        return True
+    # 表示成功修复边界，返回 True
+    return True
 
 
 def find_contour(img):
@@ -1007,95 +1084,6 @@ def find_contour(img):
     return cntr  # 这里应该返回 None，代码可能有误；或使用：return None 或者 np.array([...], dtype=np.float32)
 
 
-def improve_fft(well):
-    """
-    该函数用于改进二维傅里叶变换（FFT），通过应用一系列图像处理技术，如频率域滤波、高斯模糊、旋转校正等，以优化输入井的图像质量。
-
-    Args:
-        well (_type_): 输入变量well是一个二维数组（例如：numpy数组），代表原始井的图像数据。
-
-    Returns:
-        _type_: 返回一个经过处理后的二维数组，表示优化和旋转校正后的井图像。
-
-    实现步骤：
-    1. 使用numpy库计算well的二维傅里叶变换，并进行fftshift操作，使低频分量位于图像中心。
-    2. 创建一个与well相同大小的零掩模矩阵mask。
-    3. 计算图像的中心坐标。
-    4. 在掩模矩阵中绘制一个内外半径分别为60和50的圆环区域，内部圆以外的部分设为1，内部圆内设为0。这实现了对特定频率成分的筛选。
-    5. 将筛选后的掩模应用于傅里叶变换结果filtered。
-    6. 对筛选后的结果进行高斯模糊处理以降低高频噪声。
-    7. 找到高斯模糊后的图像中的最大值及其坐标。
-    8. 根据最大值坐标计算其与图像中心的连线角度theta，可能会遇到除以零的异常情况，此时将theta设为0。
-    9. 根据得到的角度theta以及图像中心点，利用cv2.getRotationMatrix2D创建一个旋转矩阵M。
-    10. 使用cv2.warpAffine对原始井图像well进行旋转校正，返回旋转后的新图像rotated。
-    """
-    # 计算二维傅里叶变换并移动低频成分至中心
-    fft = np.fft.fftshift(np.fft.fft2(well))
-
-    # 创建掩模矩阵
-    mask = np.zeros(well.shape)
-
-    # 计算图像中心坐标
-    center = tuple(x // 2 for x in well.shape)
-
-    # 绘制圆环区域作为频域滤波器
-    cv2.circle(mask, center, 60, color=1, thickness=-1)
-    cv2.circle(mask, center, 50, color=0, thickness=-1)
-
-    # 应用掩模到傅里叶变换结果
-    filtered = np.copy(fft) * mask
-
-    # 高斯模糊处理
-    blur = cv2.GaussianBlur(np.abs(filtered), (5, 5), 0)
-
-    # 找到最大值的位置
-    maximum = cv2.minMaxLoc(blur)[3]
-
-    # 计算角度theta
-    try:
-        theta = math.atan(float(maximum[1] - center[1]) / float(maximum[0] - center[0]))
-    except ZeroDivisionError:
-        theta = 0
-
-    # 创建旋转矩阵
-    M = cv2.getRotationMatrix2D(center, np.rad2deg(theta), 1.0)
-
-    # 对原始井图像进行旋转校正
-    rotated = cv2.warpAffine(well, M, (well.shape[1], well.shape[0]))
-
-    return rotated
-
-
-def decode(img):
-    """
-    decode 函数用于解码输入图像（img）中的二维条形码（Data Matrix）并验证其内容格式。
-
-    Args:
-        img (_type_): 一个二维数组，通常为灰度图像或单通道彩色图像，表示包含 Data Matrix 条形码的图像数据。
-
-    Returns:
-        _type_: 如果成功解码并验证了条形码内容，则返回解码后的字符串；否则返回 None。
-
-    函数实现：
-    1. 获取输入图像的高度（height）和宽度（width）。
-    2. 使用 pylibdmtx 库中的 decode 函数尝试从图像中解码 Data Matrix 条形码。`**libdmtx_params` 表示可能存在的额外参数（未在代码片段中显示）。
-    3. 若解码成功，取出第一个条形码数据，并将其转换为 UTF-8 编码的字符串。
-    4. 验证解码得到的字符串是否符合特定格式：可选两个字母开头（`\w\w`），后面跟随10个数字（`\d{10}`）。
-    5. 如果解码结果满足预设格式要求，则返回该字符串；否则返回 None。
-    """
-    # 使用pylibdmtx库解码图像中的Data Matrix条形码
-    code = pylibdmtx.decode(img, **libdmtx_params)
-
-    # 检查是否有解码结果，并将解码后的字节数据转为UTF-8编码的字符串
-    code = code[0].data.decode("utf-8") if code else False
-
-    # 验证解码得到的字符串格式是否符合预设规则
-    # if code and re.match("(\w\w)?\d{10}", code):
-    return code
-    # else:
-    #     return None
-
-
 def trim_contour(cntr, size=70):
     """
     trim_contour 函数用于调整轮廓 (contour) 的形状，使其在指定尺寸范围内尽可能接近正方形。
@@ -1127,8 +1115,6 @@ def trim_contour(cntr, size=70):
         b = cv2.norm(v)
         # b, a = rect_size
 
-        # break
-
         # 根据对角线较长的一侧决定处理维度（dim）
         if a > size:
             dim = 0
@@ -1151,15 +1137,8 @@ def trim_contour(cntr, size=70):
         # 获取变换后轮廓在当前处理维度上的坐标
         arr = cntp[dim, :]
 
-        # 计算该维度上轮廓坐标的平均值
-        m = arr.mean()
-
         # 找出该维度上坐标的最大值和最小值索引
         imax, imin = arr.argmax(), arr.argmin()
-
-        # 将最大值和最小值更新为平均值，实现拉伸或压缩效果
-        cntp[dim, imax] = m
-        cntp[dim, imin] = m
 
         # 更新轮廓中最大和最小值对应点的位置到包围矩形的中心
         cntr[imax, 0] = center

@@ -2,6 +2,7 @@ import os
 import logging
 import time
 from functools import partial
+import re
 
 import numpy as np
 import cv2
@@ -452,7 +453,7 @@ def read_barcode(well):
     # # LSD解码尝试
     # code = decode_lsd(well)
     # if code:
-    #     return (code, 'lsd')
+    #     return (code, "lsd")
 
     # 在未经改进的原始图像上尝试解码
     code = decode(well)
@@ -503,7 +504,7 @@ def decode_lsd(well, debug=False):
     )
 
     # 按长度升序排列索引
-    len_idx = lenghts.argsort()
+    len_idx = lengths.argsort()
 
     # 获取最长的两条线段
     line1 = lines[len_idx[-1]][0]
@@ -820,13 +821,13 @@ def decode(img):
     code = pylibdmtx.decode(img, **libdmtx_params)
 
     # 检查是否有解码结果，并将解码后的字节数据转为UTF-8编码的字符串
-    code = code[0].data.decode("utf-8") if code else False
+    code = code[0].data.decode("utf-8") if code else None
 
     # 验证解码得到的字符串格式是否符合预设规则
-    # if code and re.match("(\w\w)?\d{10}", code):
-    return code
-    # else:
-    #     return None
+    if is_valid_code(code):
+        return code
+
+    return None
 
 
 def warp_decode(well, box, debug=False, thr_level=80):
@@ -1338,3 +1339,12 @@ def intersection(L1, L2):
     else:
         # 当两直线平行时返回 None
         return None
+
+
+def is_valid_code(code: str) -> bool:
+    return (
+        (code is not None)
+        # and isinstance(code, str)
+        and (len(code) >= 8)
+        and (re.match("[A-Za-z0-9]+", code) is not None)
+    )
